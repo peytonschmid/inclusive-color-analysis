@@ -1,0 +1,3 @@
+[submodule "extern/apparent_skincolor"]
+	path = extern/apparent_skincolor
+	url = https://github.com/SonyResearch/apparent_skincolor

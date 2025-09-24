@@ -1,0 +1,19 @@
+# environment.yml
+name: color-analysis
+channels: [pytorch, conda-forge]
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - scikit-image
+  - scikit-learn
+  - opencv
+  - pillow
+  - matplotlib
+  - pandas
+  - pytorch
+  - torchvision
+  - pip
+  - pip:
+      - colormath
+      - onnxruntime        # if using ONNX models
