@@ -1,0 +1,38 @@
+---
+format:
+revealjs:
+width: 1600
+height: 900
+scrollable: true
+---
+
+## Problem Statement & Goal
+
+- **Problem:**  
+  Current AI-based color analysis tools emphasize one-dimensional skin tone scales (e.g., light vs. dark, or ITA only), neglecting hue and undertone. This leads to incomplete or biased recommendations, especially under varied lighting or for individuals with tonal variation (e.g., Vitiligo).  
+
+- **Goal:**  
+  Build an inclusive tool that analyzes skin tone and undertones using multidimensional color science (CIELAB: L*, a*, b*) to provide **fair, reliable, and personalized clothing color palettes**.  
+  - Reduce bias by incorporating lightness, hue, and undertone together.  
+  - Improve usability with photo quality checks and confidence scores.  
+  - Ensure inclusivity for diverse skin tones and conditions.  
+
+---
+
+## Methodology Overview
+
+- **Core Approach**  
+  - Convert uploaded user photos into CIELAB color space (L*, a*, b*).  
+  - Perform **whole-image analysis** (not a single skin patch) to account for lighting variation and tonal diversity.  
+  - Compute multidimensional features:  
+    - ΔE\*ab (perceptual difference across images)  
+    - Hue angle (h\*)  
+    - Individual Typology Angle (ITA)  
+  - Integrate fairness-aware evaluation across skin tone bins and undertones.  
+
+- **Technical Plan**  
+  1. **Preprocessing:** Photo quality check and exposure correction (Afifi et al., CVPR 2020).  
+  2. **Feature Extraction:** CIELAB conversion, ITA, and hue angle calculations (Thong et al., ICCV 2023).  
+  3. **Analysis:** Whole-image statistics + fairness metrics (ΔE repeatability, parity across bins).  
+  4. **Output:** Clothing color palette recommendations via color theory (complementary/analogous/triadic).  
+  5. **Transparency:** Confidence scores to indicate when results are dependable.  
