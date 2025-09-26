@@ -1,9 +1,9 @@
 ---
 format:
   revealjs:
-  width: 1600
-  height: 900
-  scrollable: true
+    width: 1600
+    height: 900
+    scrollable: true
 ---
 
 ## Problem Statement & Goal
