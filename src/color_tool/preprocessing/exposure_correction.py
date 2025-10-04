@@ -24,14 +24,14 @@ import numpy as np
 @dataclass
 class PreprocessConfig:
     # Exposure
-    target_mid_gray: float = 0.45      # desired midtone
-    midtone_percentile: float = 52.0   # percentile treated as "midface"
+    target_mid_gray: float = 0.42      # desired midtone
+    midtone_percentile: float = 60.0   # percentile treated as "midface"
     exposure_gain_min: float = 0.6     # >>> NEW: safer lower clamp (was 0.5)
     exposure_gain_max: float = 2.4     # >>> NEW: lower ceiling to avoid blowouts (was 3.0)
 
     # White balance
-    wb_p_norm: int = 7
-    wb_gain_clip: float = 2.4          # >>> NEW: safer cap (was 3.0)
+    wb_p_norm: int = 4
+    wb_gain_clip: float = 1.8         # >>> NEW: safer cap (was 3.0)
 
     # LAB / CLAHE
     clahe_tile: int = 8
@@ -47,6 +47,11 @@ class PreprocessConfig:
     max_underexp_pct: float = 8.0      # >>> NEW: looser shadow tolerance (was 5.0)
     max_ab_bias: float = 3.0           # tighter neutrality tolerance (was 3.5)
     min_blur_var: float = 60.0         # Laplacian variance lower bound
+
+    # midtone range and max luminance for no-edit window
+    min_midtone: float = 0.38   # >>> NEW: wider no-edit window (was 0.38)
+    max_midtone: float = 0.54   # >>> NEW: wider no-edit window (was 0.54)
+    max_safe_highs: float = 0.88 # >>> NEW: allow slightly brighter highlights (was 0.95)
 
     skin_min_fraction: float = 0.10    # >>> NEW: need enough skin to judge (was 0.02)
 
@@ -217,8 +222,8 @@ def correct_exposure(
 
     # -------- NO-EDIT WINDOW: leave already-good exposures untouched ----------
     # Wider band: treat 0.36–0.56 as acceptable midtone; highlights safe up to 0.96
-    adequate_mid = 0.36 <= y50 <= 0.56
-    safe_highs  = y95 <= 0.96
+    adequate_mid = cfg.min_midtone <= y50 <= cfg.max_midtone
+    safe_highs  = y95 <= cfg.max_safe_highs
 
     if adequate_mid and safe_highs:
         # Small "jitter" guard—if a computed gain would move midtone by < 0.03, skip edits anyway
@@ -251,13 +256,17 @@ def correct_exposure(
 
     # 2) Exposure gain (skin-aware if possible) + soft roll-off with predicted clip guard
     use_skin = (skin_frac >= cfg.skin_min_fraction)
-
+ 
     proposed_gain = estimate_exposure_gain(
         lin, cfg.target_mid_gray, cfg.midtone_percentile,
         cfg.exposure_gain_min, cfg.exposure_gain_max,
         skin_mask=skin if use_skin else None
     )
 
+    if use_skin and (0.4 <= y50 <= 0.56) and (pre_ab_bias <= 2.2):
+        # prevent lifting if skin already mid-bright and chroma is healhty:
+        proposed_gain = min(proposed_gain, 1.15)
+        
     # >>> TWEAK: dynamic max gain — allow higher ceiling only when skin is clearly dark
     # (keeps good/brighter images safe, but lifts sample2–4)
     _, _, y95_sel, y99_sel = (s_y5, s_y50, s_y95, s_y99) if use_skin else (g_y5, g_y50, g_y95, g_y99)

@@ -9,7 +9,7 @@ format:
 ## Problem Statement & Goal
 
 - **Problem:**  
-  Current AI-based color analysis tools emphasize one-dimensional skin tone scales (e.g., light vs. dark, or ITA only), neglecting hue and undertone. This leads to incomplete or biased recommendations, especially under varied lighting or for individuals with tonal variation (e.g., Vitiligo).  
+  Current color analysis tools emphasize one-dimensional skin tone scales (e.g., light vs. dark, or ITA only), neglecting hue and undertone. This leads to incomplete or biased recommendations, especially under varied lighting or for individuals with tonal variation (e.g., Vitiligo).  
 
 - **Goal:**  
   Build an inclusive tool that analyzes skin tone and undertones using multidimensional color science (CIELAB: L*, a*, b*) to provide **fair, reliable, and personalized clothing color palettes**.  
@@ -22,6 +22,8 @@ format:
 ## Methodology Overview
 
 - **Core Approach**  
+  - Evaluate image quality prior to color analysis to ensure reliable, repeatable results.
+    - Automatically edit exposure 
   - Convert uploaded user photos into CIELAB color space (L*, a*, b*).  
   - Perform **whole-image analysis** (not a single skin patch) to account for lighting variation and tonal diversity.  
   - Compute multidimensional features:  
@@ -36,3 +38,282 @@ format:
   3. **Analysis:** Whole-image statistics + fairness metrics (ΔE repeatability, parity across bins).  
   4. **Output:** Clothing color palette recommendations via color theory (complementary/analogous/triadic).  
   5. **Transparency:** Confidence scores to indicate when results are dependable.  
+
+## Code Snippet 1
+
+
+```python
+# NO-EDIT WINDOW (leave good exposures untouched) + jitter guard
+skin = quick_skin_mask(bgr_u8)
+skin_frac = float((skin > 0).mean())
+g_y5, g_y50, g_y95, g_y99 = luminance_percentiles(lin)
+s_y5, s_y50, s_y95, s_y99 = luminance_percentiles(
+    lin, skin if skin_frac >= cfg.skin_min_fraction else None
+)
+use_skin = (skin_frac >= cfg.skin_min_fraction)
+y50 = s_y50 if use_skin else g_y50
+y95 = s_y95 if use_skin else g_y95
+adequate_mid = 0.36 <= y50 <= 0.56
+safe_highs  = y95 <= 0.96
+if adequate_mid and safe_highs:
+    est_gain = cfg.target_mid_gray / max(y50, 1e-6)
+    if abs((y50 * est_gain) - y50) < 0.03:  # jitter guard
+        report["exposure_gain"] = 1.0; report["wb_method"] = "noop"
+        return bgr_u8, report
+```
+
+## Explanation of Snippet 1
+
+- **Purpose**: Establish a no-edit window to protect already well-exposed photos from unnecessary brightening that can cause overexposure or whitewashing.
+- **How it works:**
+  - Compute skin-weighted luminance percentiles (s_y*) and fall back to global (g_y*) if not enough skin is detected.
+  - Define adequacy by midtone within 0.36–0.56 and highlights ≤ 0.96.
+  - Apply a jitter guard: if the calculated gain would change the midtone by < 0.03, skip edits and return the original.
+- **Importance:**
+  - Prevents degrading high-quality inputs (e.g., Sample 5).
+  - Improves fairness by respecting diverse skin tones and lighting; not every image needs the same lift.
+  - Keeps preprocessing stable so downstream color analysis (CIELAB features, palette generation) remains trustworthy.
+
+## Code Snippet 2
+
+```python
+# DYNAMIC EXPOSURE CAP + highlight safety (skin-first)
+proposed_gain = estimate_exposure_gain(
+    lin, cfg.target_mid_gray, cfg.midtone_percentile,
+    cfg.exposure_gain_min, cfg.exposure_gain_max,
+    skin_mask=skin if use_skin else None
+)
+
+# allow more headroom only when skin is clearly dark
+if y50 < 0.34 or (s_y95 if use_skin else g_y95) < 0.80:
+    dyn_max = max(cfg.exposure_gain_max, 2.9)
+elif y50 < 0.40:
+    dyn_max = max(cfg.exposure_gain_max, 2.7)
+else:
+    dyn_max = cfg.exposure_gain_max
+
+y99_sel = (s_y99 if use_skin else g_y99)
+max_gain_clip = 0.98 / max(y99_sel, 1e-3) * 0.98
+proposed_gain = float(min(proposed_gain, dyn_max, max_gain_clip))
+if ((s_y95 if use_skin else g_y95) * proposed_gain) > 0.95:
+    proposed_gain *= 0.92
+
+k = k_for_soft_tone(s_y95 if use_skin else g_y95)
+lin = soft_tone(lin * float(proposed_gain), k=k)
+```
+
+## Explanation of Code Snippet 2
+- **Purpose:** Dynamically adjust exposure gain based on skin luminance percentiles to correct underexposed images while avoiding highlight clipping.
+- **How it works:**
+  - Uses y50 (skin or global midtone) to decide whether more exposure is needed.
+  - Sets a dynamic maximum gain (up to 2.9) for darker cases; smaller caps for lighter cases.
+  - Ensures highlights remain safe using y95/y99-based clipping guards.
+  - Applies adaptive soft-tone compression (soft_tone) to protect textures.
+- **Importance:**:
+  - Lifts dark-skinned faces in low light (e.g., Sample 2) without blowing out highlights.
+  - Makes exposure correction skin-aware, not just global.
+  - Provides fairer treatment across diverse skin tones while maintaining detail.
+
+## Code Snippet 1 
+
+```python
+# NO-EDIT WINDOW (leave good exposures untouched) + jitter guard
+skin = quick_skin_mask(bgr_u8)
+skin_frac = float((skin > 0).mean())
+g_y5, g_y50, g_y95, g_y99 = luminance_percentiles(lin)
+s_y5, s_y50, s_y95, s_y99 = luminance_percentiles(
+    lin, skin if skin_frac >= cfg.skin_min_fraction else None
+)
+use_skin = (skin_frac >= cfg.skin_min_fraction)
+y50 = s_y50 if use_skin else g_y50
+y95 = s_y95 if use_skin else g_y95
+adequate_mid = 0.36 <= y50 <= 0.56
+safe_highs  = y95 <= 0.96
+if adequate_mid and safe_highs:
+    est_gain = cfg.target_mid_gray / max(y50, 1e-6)
+    if abs((y50 * est_gain) - y50) < 0.03:  # jitter guard
+        report["exposure_gain"] = 1.0; report["wb_method"] = "noop"
+        return bgr_u8, report
+```
+
+## Explanation of Code Snippet 1
+
+**Purpose:** Establish a no-edit window to protect already well-exposed photos from unnecessary brightening that can cause overexposure or whitewashing.
+
+How it works:
+- Compute skin-weighted luminance percentiles (s_y*) and fall back to global (g_y*) if not enough skin is detected.
+- Define adequacy metric using midtone within 0.36–0.56 and highlights ≤ 0.96.
+- Apply a jitter guard: if the calculated gain would change the midtone by < 0.03, skip edits and return the original.
+
+Importance: 
+- Prevents degrading high-quality inputs (e.g., Sample 5).
+- Improves fairness by respecting diverse skin tones and lighting; not every image needs the same lift.
+- Keeps preprocessing stable so downstream color analysis (CIELAB features, palette generation) remains trustworthy.
+
+## Code Snippet 2 (≤ 20 lines)
+
+```python
+# DYNAMIC EXPOSURE CAP + highlight safety (skin-first)
+proposed_gain = estimate_exposure_gain(
+    lin, cfg.target_mid_gray, cfg.midtone_percentile,
+    cfg.exposure_gain_min, cfg.exposure_gain_max,
+    skin_mask=skin if use_skin else None
+)
+
+# allow more headroom only when skin is clearly dark
+if y50 < 0.34 or (s_y95 if use_skin else g_y95) < 0.80:
+    dyn_max = max(cfg.exposure_gain_max, 2.9)
+elif y50 < 0.40:
+    dyn_max = max(cfg.exposure_gain_max, 2.7)
+else:
+    dyn_max = cfg.exposure_gain_max
+
+y99_sel = (s_y99 if use_skin else g_y99)
+max_gain_clip = 0.98 / max(y99_sel, 1e-3) * 0.98
+proposed_gain = float(min(proposed_gain, dyn_max, max_gain_clip))
+if ((s_y95 if use_skin else g_y95) * proposed_gain) > 0.95:
+    proposed_gain *= 0.92
+
+k = k_for_soft_tone(s_y95 if use_skin else g_y95)
+lin = soft_tone(lin * float(proposed_gain), k=k)
+```
+
+## Explanation of Code Snippet 2
+
+**Purpose:** Dynamically adjust exposure gain based on skin luminance percentiles to correct underexposed images while avoiding highlight clipping.
+
+**How it works:**
+- Uses y50 (skin or global midtone) to decide whether more exposure is needed.
+- Sets a dynamic maximum gain (up to 2.9) for darker cases; smaller caps for lighter cases.
+- Ensures highlights remain safe using y95/y99-based clipping guards.
+- Applies adaptive soft-tone compression (soft_tone) to protect textures.
+
+**Importance:**
+- Lifts darker-complexioned faces in low light (e.g., Sample 2) without blowing out highlights.
+- Makes exposure correction skin-aware, not just global.
+- Provides fairer treatment across diverse skin tones while maintaining detail.
+
+## Preliminary Results
+
+## Slide 7: Preliminary Results — Before vs After (5 Samples)
+
+<!-- Initial code efforts so far are concentrated on preprocessing:
+     exposure/WB correction with a no-edit window, dynamic exposure caps,
+     CLAHE gating, gentle chroma recentering, and skin-weighted quality gates. -->
+
+### Sample 1 
+::: columns
+::: column
+**Before**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/raw/sample1.png?raw=true)
+:::
+::: column
+**After**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/processed/sample1_corrected.png?raw=true)
+:::
+:::
+
+### Sample 2 
+::: columns
+::: column
+**Before**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/raw/sample2.png?raw=true)
+:::
+::: column
+**After**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/processed/sample2_corrected.png?raw=true)
+:::
+:::
+
+### Sample 3
+::: columns
+::: column
+**Before**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/raw/sample3.png?raw=true)
+:::
+::: column
+**After**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/processed/sample3_corrected.png?raw=true)
+:::
+:::
+
+### Sample 4 
+::: columns
+::: column
+**Before**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/raw/sample4.png?raw=true)
+:::
+::: column
+**After**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/processed/sample4_corrected.png?raw=true)
+:::
+:::
+
+### Sample 5 — Asian male (adequate exposure)
+::: columns
+::: column
+**Before**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/raw/sample5.png?raw=true)
+:::
+::: column
+**After**  
+![](https://github.com/peytonschmid/inclusive-color-analysis/blob/main/data/processed/sample5_corrected.png?raw=true)
+:::
+:::
+
+#### Key Post-Edit Metrics (from console)
+| Sample | overall_ok | skin_y50 | skin_y95 | overexp% | underexp% | Notes |
+|---|---:|---:|---:|---:|---:|---|
+| 1 | False | 0.390 | 0.829 | 3.14 | 15.22 | Slightly dim; WB bias still high |
+| 2 | False | 0.193 | 0.670 | 0.73 | 28.36 | Face remains too dark; low sharpness |
+| 3 | False | 0.392 | 0.828 | 1.34 | 22.77 | Underexposed midtones (backlit) |
+| 4 | False | 0.222 | 0.392 | 0.45 | 11.58 | **Best look**; tonal variation preserved |
+| 5 | **True** | 0.514 | 0.845 | 0.65 | 2.40 | **Issue:** Edit appears lighter than original (risk of whitewashing) |
+
+> **Reviewer note:** Based on visual comparison and project goals, **Sample 5 should be treated as overall_ok = False** (original quality superior; avoid whitening well-exposed subjects).
+
+## Slide 8: Result Analysis & Next Steps
+
+### What We See
+- The **no-edit window** reduced unnecessary edits, but **Sample 5** still appeared lighter than its excellent original → it should not pass as `overall_ok=True`.  
+- The **dynamic exposure cap** helped preserve highlights, with **Sample 4 (Vitiligo)** looking the most natural and inclusive.  
+- **Samples 1–3** remain too dark, especially in backlit or mixed-light settings, showing that the current rules are still too conservative.
+
+---
+
+### Challenges with a Diverse Palette
+- A **single midtone target** cannot fit all tones:
+  - Deeper tones under backlight need stronger lift.  
+  - Lighter tones may need no edits.  
+- **Backlit scenes**: background highlights dominate clipping thresholds.  
+- **Multi-modal skin** (Vitiligo) requires cluster-aware statistics so both lighter and darker regions are preserved fairly.  
+
+---
+
+### Why `overall_ok` Isn’t Accurate Yet
+- Current gating is **rule-based** (thresholds for luminance, bias, sharpness).  
+- Ignores **perceptual realism**: e.g., Sample 5 passes despite being “whitewashed.”  
+- Doesn’t incorporate **scene context** or fairness-aware considerations.
+
+---
+
+### Next Steps: Adding AI / ML
+1. **Learned Exposure Recommender (regressor)**  
+   - Inputs: luminance percentiles, CIELAB histograms, ab-bias, blur, backlight ratio.  
+   - Output: predicted *ideal gain* + confidence, tuned on diverse annotated examples.  
+
+2. **Learned Quality Gate (classifier)**  
+   - Inputs: post-edit features + ΔE changes.  
+   - Output: calibrated probability of “usable” vs. “retake,” parity-checked across tone bins.  
+   - Prevents approving whitening (fixes Sample 5).  
+
+3. **Region/Mixture Handling**  
+   - Cluster skin pixels into tonal groups.  
+   - Apply region-weighted edits with smooth blending, preserving tonal diversity (critical for Vitiligo cases).  
+
+---
+
+### Immediate Short-Term Tweaks
+- For backlit cases: increase `dyn_max` exposure cap slightly (e.g., +0.2) and raise target mid-gray to ~0.46.  
+- Add **no-edit preference**: if original midtones and bias are within tolerance, block approval when ΔE(L*) > 2 → prevents unnecessary whitening.  
+
